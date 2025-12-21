@@ -119,7 +119,7 @@ with st.sidebar.expander("📡 Network Layers", expanded=True):
     show_hydro = st.toggle("Hydrology Network", value=True)
 
 # --- MAIN ---
-st.title("Vietnam Environmental Monitoring Portal")
+st.title("Vietnam Hydromet Monitoring Portal (BETA)")
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Meteorology Network", f"{len(met_df)} Stations")
@@ -238,3 +238,4 @@ st.markdown("""
 © 2024 Trần Anh Quân – Hanoi University of Mining and Geology (HUMG)
 </div>
 """, unsafe_allow_html=True)
+
