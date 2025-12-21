@@ -134,3 +134,29 @@ try:
                 ).add_to(m)
 
             # Thêm Marker
+            folium.Marker(
+                location=[row['lat'], row['lon']],
+                popup=f"<b>{row['NAME']}</b><br>Type: {label}",
+                tooltip=row['NAME'] if show_names else None,
+                icon=folium.Icon(color=color, icon=icon, prefix='fa')
+            ).add_to(container)
+
+    # Vẽ các lớp dữ liệu
+    if show_met: plot_layer(met_df, "blue", "cloud", "Meteorology", is_met=True)
+    if show_water: plot_layer(water_df, "green", "tint", "Water Quality")
+    if show_hydro: plot_layer(hydro_df, "red", "water", "Hydrology")
+
+    folium.LayerControl(position='topright').add_to(m)
+    st_folium(m, width="100%", height=700, key="vn_pro_system")
+
+    # Bản quyền (Copyright)
+    st.markdown("""
+        <div class="footer">
+            © 2024 Vietnam Environmental Monitoring Network. All rights reserved. 
+            | Developed for professional hydromet data visualization.
+        </div>
+        """, unsafe_allow_html=True)
+
+except Exception as e:
+    st.error(f"System Error: {e}")
+    st.info("Please make sure your CSV files contain 'STATIONS' (or 'NAME'), 'LAT', and 'LON' columns.")
