@@ -1,8 +1,8 @@
-streamlit>=1.30
-pandas>=1.5
-numpy>=1.23
+streamlit
+pandas
+folium
+streamlit-folium
+plotly
+geopandas
+openpyxl
 
-# Mapping stack
-leafmap>=0.38
-ipyleaflet>=0.19
-folium>=0.15
