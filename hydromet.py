@@ -21,18 +21,17 @@ st.markdown("""
 def load_and_process_data():
     # Helper to find files regardless of folder structure
     def get_path(filename):
-        # Checks for file in current directory OR in a 'data' subfolder
         if os.path.exists(filename): return filename
         path = os.path.join("data", filename)
         if os.path.exists(path): return path
         raise FileNotFoundError(f"Could not find {filename}")
 
-    # [cite_start]1. Load your revised CSV files using exact names from your upload [cite: 1, 4, 20]
+    # 1. Load your revised CSV files using exact names from your upload
     met = pd.read_csv(get_path('meteorology.xlsx - Sheet1.csv'))
     water = pd.read_csv(get_path('water quality.xlsx - Sheet.csv'))
     hydro = pd.read_csv(get_path('hydrology station.xlsx - Export.csv'))
     
-    # [cite_start]2. Standardize Columns and Clean strings [cite: 1, 4, 20]
+    # 2. Standardize Columns and Clean strings
     met = met.rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat', 'ALTITUDE': 'altitude'})
     water = water.rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat', 'Province': 'province_raw'})
     hydro = hydro.rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat'})
@@ -44,7 +43,7 @@ def load_and_process_data():
         df['lon'] = pd.to_numeric(df['lon'], errors='coerce')
         df.dropna(subset=['lat', 'lon'], inplace=True)
 
-    # 3. Load Shapefile (Look in root or 'shapefiles' folder)
+    # 3. Load Shapefile
     shp_path = "Vietnam34.shp"
     if not os.path.exists(shp_path):
         shp_path = os.path.join("shapefiles", "Vietnam34.shp")
@@ -57,7 +56,7 @@ def load_and_process_data():
     def assign_province(df):
         points = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat), crs="EPSG:4326")
         joined = gpd.sjoin(points, gdf_prov, how="left", predicate="within")
-        # Identify name column (likely NAME_1, TEN_TINH, etc.)
+        # Identify name column from shapefile attributes
         name_cols = [c for c in joined.columns if 'NAME' in c.upper() or 'TINH' in c.upper()]
         prov_col = name_cols[0] if name_cols else joined.columns[0]
         df['province'] = joined[prov_col].fillna("Unknown Area")
@@ -88,9 +87,9 @@ try:
     st.title("Vietnam Environmental Monitoring Network")
     
     cols = st.columns(3)
-    [cite_start]cols[0].metric("Meteorology Stations", len(met_df)) [cite: 1]
-    [cite_start]cols[1].metric("Water Quality Stations", len(water_df)) [cite: 4]
-    [cite_start]cols[2].metric("Hydrology Stations", len(hydro_df)) [cite: 20]
+    cols[0].metric("Meteorology Stations", len(met_df))
+    cols[1].metric("Water Quality Stations", len(water_df))
+    cols[2].metric("Hydrology Stations", len(hydro_df))
 
     # --- MAP ---
     m = folium.Map(location=[16.46, 107.59], zoom_start=6, tiles="cartodbpositron")
@@ -112,7 +111,7 @@ try:
         for _, row in data.iterrows():
             popup_text = f"<b>{row['name']}</b><br>Type: {label}<br>Province: {row['province']}"
             if 'altitude' in row and not pd.isna(row['altitude']):
-                [cite_start]popup_text += f"<br>Altitude: {row['altitude']}m" [cite: 1]
+                popup_text += f"<br>Altitude: {row['altitude']}m"
             
             folium.CircleMarker(
                 location=[row['lat'], row['lon']],
@@ -132,4 +131,3 @@ try:
 
 except Exception as e:
     st.error(f"Critical Error: {e}")
-    st.info("Check that your CSV files and Shapefiles are in the root directory or 'data'/'shapefiles' folders.")
