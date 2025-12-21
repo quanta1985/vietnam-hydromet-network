@@ -99,3 +99,32 @@ try:
             # Add dynamic fields if they exist
             if 'province' in row and not pd.isna(row['province']):
                 popup_html += f"<br>Province: {row['province']}"
+            if 'altitude' in row and not pd.isna(row['altitude']):
+                popup_html += f"<br>Altitude: {row['altitude']} m"
+
+            folium.CircleMarker(
+                location=[row['lat'], row['lon']],
+                radius=6,
+                popup=folium.Popup(popup_html, max_width=250),
+                color=color,
+                fill=True,
+                fill_color=color,
+                fill_opacity=0.7
+            ).add_to(cluster)
+
+    # Add Layers based on Toggle state
+    if show_met: 
+        plot_data(met_df, "#0052cc", "Meteorology")
+    if show_water: 
+        plot_data(water_df, "#228b22", "Water Quality")
+    if show_hydro: 
+        plot_data(hydro_df, "#d32f2f", "Hydrology")
+
+    folium.LayerControl().add_to(m)
+    
+    # Display the Map
+    st_folium(m, width="100%", height=650, key="vn_station_map", returned_objects=[])
+
+except Exception as e:
+    st.error(f"Critical System Error: {e}")
+    st.info("Check that 'openpyxl' is in requirements.txt and your Excel/CSV files are in the repository.")
