@@ -1,15 +1,15 @@
 import streamlit as st
 import pandas as pd
-import folium
-from streamlit_folium import st_folium
-from folium.plugins import MarkerCluster, Fullscreen, MiniMap, Draw
+import leafmap.foliumap as leafmap  # Professional mapping backend
 import os
 import glob
+from folium.plugins import MarkerCluster, Fullscreen, MiniMap, Draw
+from streamlit_folium import st_folium
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Vietnam Hydromet Monitoring System", layout="wide", page_icon="🌐")
 
-# --- CSS ---
+# --- CSS (Keep as is) ---
 st.markdown("""
 <style>
 .main { background-color: #f4f7f9; }
@@ -17,7 +17,7 @@ st.markdown("""
     background-color: #ffffff;
     padding: 20px;
     border-radius: 12px;
-    box-shadow: 0 4fpx 6px rgba(0,0,0,0.05);
+    box-shadow: 0 4px 6px rgba(0,0,0,0.05);
     border: 1px solid #e1e8ed;
 }
 .stSidebar { background-color: #ffffff; border-right: 1px solid #dee2e6; }
@@ -37,13 +37,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- SESSION STATE FOR MAP VIEW (MINIMAL ADDITION) ---
+# --- SESSION STATE FOR MAP VIEW ---
 if "map_center" not in st.session_state:
     st.session_state.map_center = [16.46, 107.59]
 if "map_zoom" not in st.session_state:
     st.session_state.map_zoom = 6
 
-# --- DATA ---
+# --- DATA (Updated to use leafmap's csv_to_df internally if needed, but keeping current robust logic) ---
 @st.cache_data
 def load_and_process_data():
     def find_file(patterns):
@@ -58,6 +58,7 @@ def load_and_process_data():
         path = find_file([f"*{pattern}*.xlsx", f"*{pattern}*.csv"])
         if not path:
             return pd.DataFrame()
+        # leafmap has a utility for csv but keeping current for consistency
         return pd.read_csv(path) if path.lower().endswith(".csv") else pd.read_excel(path)
 
     met = read_flexible("meteorology").rename(columns={'STATIONS':'name','LON':'lon','LAT':'lat','ALTITUDE':'altitude'})
@@ -79,17 +80,20 @@ met_df, water_df, hydro_df = load_and_process_data()
 st.sidebar.title("🛠 System Control")
 
 with st.sidebar.expander("🗺️ Map Customization", expanded=True):
-    basemap = st.selectbox(
+    # leafmap allows for easier basemap switching
+    basemap_selection = st.selectbox(
         "Basemap Style",
-        ["Light (CartoDB)", "Satellite (Google)", "Dark Mode", "Terrain"]
+        ["OpenStreetMap", "ROADMAP", "SATELLITE", "TERRAIN", "HYBRID", "Dark Mode"]
     )
-    tiles_map = {
-        "Light (CartoDB)": "cartodbpositron",
-        "Satellite (Google)": "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
-        "Dark Mode": "cartodbdark_matter",
-        "Terrain": "https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}",
+    # Mapping custom names to leafmap/folium tiles
+    leafmap_basemaps = {
+        "OpenStreetMap": "OpenStreetMap",
+        "ROADMAP": "ROADMAP",
+        "SATELLITE": "SATELLITE",
+        "TERRAIN": "TERRAIN",
+        "HYBRID": "HYBRID",
+        "Dark Mode": "CartoDB.DarkMatter"
     }
-    attr_map = {"Satellite (Google)": "Google", "Terrain": "Google"}
 
 with st.sidebar.expander("⚙️ Display Settings", expanded=True):
     disable_clustering = st.checkbox("Disable Cluster Stacking")
@@ -104,7 +108,6 @@ with st.sidebar.expander("⚙️ Display Settings", expanded=True):
 
 with st.sidebar.expander("📡 Network Layers", expanded=True):
     show_met = st.toggle("Meteorology Network", value=True)
-
     met_radius_on = False
     if show_met:
         met_radius_on = st.checkbox("Enable Coverage Radius (Met Only)")
@@ -117,21 +120,27 @@ with st.sidebar.expander("📡 Network Layers", expanded=True):
     show_hydro = st.toggle("Hydrology Network", value=True)
 
 # --- MAIN ---
-st.title("Vietnam Hydromet Monitoring Portal")
+st.title("Vietnam Environmental Monitoring Portal")
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Meteorology Network", f"{len(met_df)} Stations")
 c2.metric("Water Quality", f"{len(water_df)} Points")
 c3.metric("Hydrology Network", f"{len(hydro_df)} Stations")
 
-# --- MAP (USE SAVED VIEW) ---
-m = folium.Map(
-    location=st.session_state.map_center,
-    zoom_start=st.session_state.map_zoom,
-    tiles=tiles_map[basemap],
-    attr=attr_map.get(basemap, "OpenStreetMap")
+# --- MAP (Integrated with leafmap) ---
+# leafmap.Map provides a more robust initial object
+m = leafmap.Map(
+    center=st.session_state.map_center,
+    zoom=st.session_state.map_zoom,
+    draw_control=False,  # We will add Draw plugin manually for consistency
+    measure_control=False,
+    fullscreen_control=False
 )
 
+# Set basemap easily with leafmap
+m.add_basemap(leafmap_basemaps[basemap_selection])
+
+# Add plugins for Pro features
 MiniMap(toggle_display=True, width=180, height=180).add_to(m)
 Fullscreen().add_to(m)
 Draw(export=True).add_to(m)
@@ -144,34 +153,39 @@ def add_layer(df, color, icon, label, is_met=False):
     if search_query:
         data = data[data['name'].str.lower().str.contains(search_query)]
 
-    container = m if disable_clustering else MarkerCluster(name=label).add_to(m)
+    # leafmap allows using folium FeatureGroups or direct adding
+    # We use Cluster if not disabled
+    if disable_clustering:
+        container = m
+    else:
+        # leafmap has built-in cluster support, but for custom styling we use folium plugin
+        container = MarkerCluster(name=label).add_to(m)
 
     for _, row in data.iterrows():
         tooltip = row['name'] if show_names else None
         popup = f"<b>Station:</b> {row['name']}<br><b>Network:</b> {label}"
 
-        # --- SHADED RADIUS (NO BORDER) ---
         if is_met and met_radius_on:
-            folium.Circle(
+            # leafmap handles circle creation similarly
+            leafmap.folium.Circle(
                 location=[row['lat'], row['lon']],
                 radius=met_rad_km * 1000,
                 fill=True,
                 fill_color=met_rad_color,
                 fill_opacity=0.08,
                 stroke=False,
-                color=None
             ).add_to(m)
 
+        # Handle Marker Styles
         if marker_style == "Classic (FontAwesome)":
-            folium.Marker(
+            leafmap.folium.Marker(
                 [row['lat'], row['lon']],
                 popup=popup,
                 tooltip=tooltip,
-                icon=folium.Icon(color=color, icon=icon, prefix='fa')
+                icon=leafmap.folium.Icon(color=color, icon=icon, prefix='fa')
             ).add_to(container)
-
         elif marker_style == "Circle (Clean)":
-            folium.CircleMarker(
+            leafmap.folium.CircleMarker(
                 [row['lat'], row['lon']],
                 radius=marker_size,
                 popup=popup,
@@ -180,9 +194,8 @@ def add_layer(df, color, icon, label, is_met=False):
                 fill=False,
                 weight=2
             ).add_to(container)
-
         elif marker_style == "Circle (Filled)":
-            folium.CircleMarker(
+            leafmap.folium.CircleMarker(
                 [row['lat'], row['lon']],
                 radius=marker_size,
                 popup=popup,
@@ -192,9 +205,8 @@ def add_layer(df, color, icon, label, is_met=False):
                 fill_color=color,
                 fill_opacity=0.8
             ).add_to(container)
-
-        else:
-            folium.CircleMarker(
+        else: # Minimal Dot
+            leafmap.folium.CircleMarker(
                 [row['lat'], row['lon']],
                 radius=max(3, marker_size // 2),
                 popup=popup,
@@ -214,6 +226,7 @@ if show_hydro:
     add_layer(hydro_df, "red", "water", "Hydrology")
 
 # --- RENDER & CAPTURE VIEW ---
+# Leafmap objects are compatible with st_folium
 map_data = st_folium(
     m,
     width="100%",
@@ -222,6 +235,7 @@ map_data = st_folium(
     returned_objects=["center", "zoom"]
 )
 
+# Update session state for persistence
 if map_data.get("center"):
     st.session_state.map_center = [
         map_data["center"]["lat"],
@@ -236,4 +250,3 @@ st.markdown("""
 © 2024 Trần Anh Quân – Hanoi University of Mining and Geology (HUMG)
 </div>
 """, unsafe_allow_html=True)
-
