@@ -22,32 +22,31 @@ st.markdown("""
 @st.cache_data
 def load_and_process_data():
     def find_file(pattern):
-        """Finds a file matching a pattern in the root or 'data' folder."""
-        # Check root
+        """Finds an .xlsx file matching a pattern in the root or 'data' folder."""
+        # Search for .xlsx files specifically
         matches = glob.glob(pattern)
         if not matches:
-            # Check 'data' subfolder
             matches = glob.glob(os.path.join("data", pattern))
         
         if matches:
             return matches[0]
         return None
 
-    # 1. Load your CSV files using patterns to avoid "File Not Found" errors
+    # 1. Load your Excel files (.xlsx)
     # Meteorology
-    met_file = find_file("*meteorology*.csv")
-    if not met_file: raise FileNotFoundError("Meteorology CSV file not found.")
-    met = pd.read_csv(met_file).rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat', 'ALTITUDE': 'altitude'})
+    met_file = find_file("*meteorology*.xlsx")
+    if not met_file: raise FileNotFoundError("Meteorology Excel file (.xlsx) not found.")
+    met = pd.read_excel(met_file).rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat', 'ALTITUDE': 'altitude'}) [cite: 1]
 
     # Water Quality
-    water_file = find_file("*water quality*.csv")
-    if not water_file: raise FileNotFoundError("Water Quality CSV file not found.")
-    water = pd.read_csv(water_file).rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat', 'Province': 'province_raw'})
+    water_file = find_file("*water quality*.xlsx")
+    if not water_file: raise FileNotFoundError("Water Quality Excel file (.xlsx) not found.")
+    water = pd.read_excel(water_file).rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat', 'Province': 'province_raw'}) [cite: 4]
 
     # Hydrology
-    hydro_file = find_file("*hydrology station*.csv")
-    if not hydro_file: raise FileNotFoundError("Hydrology CSV file not found.")
-    hydro = pd.read_csv(hydro_file).rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat'})
+    hydro_file = find_file("*hydrology station*.xlsx")
+    if not hydro_file: raise FileNotFoundError("Hydrology Excel file (.xlsx) not found.")
+    hydro = pd.read_excel(hydro_file).rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat'}) [cite: 20]
     
     # 2. Clean station names and coordinates
     for df in [met, water, hydro]:
@@ -59,7 +58,6 @@ def load_and_process_data():
     # 3. Load Shapefile
     shp_file = find_file("Vietnam34.shp")
     if not shp_file:
-        # Fallback to looking inside 'shapefiles' folder
         shp_file = glob.glob(os.path.join("shapefiles", "Vietnam34.shp"))
         shp_file = shp_file[0] if shp_file else None
     
@@ -67,9 +65,10 @@ def load_and_process_data():
     
     gdf_prov = gpd.read_file(shp_file)
     gdf_prov = gdf_prov.to_crs(epsg=4326)
-    gdf_prov['geometry'] = gdf_prov['geometry'].simplify(tolerance=0.005)
+    # Simplify geometry for high performance (Pro Tip)
+    gdf_prov['geometry'] = gdf_prov['geometry'].simplify(tolerance=0.01, preserve_topology=True)
 
-    # 4. Spatial Join to assign Province to every station
+    # 4. Spatial Join to assign Province to every station automatically
     def assign_province(df):
         points = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat), crs="EPSG:4326")
         joined = gpd.sjoin(points, gdf_prov, how="left", predicate="within")
@@ -82,12 +81,11 @@ def load_and_process_data():
 
 # --- APP LAYOUT ---
 try:
-    with st.spinner("Loading Vietnam Environmental Monitoring Data..."):
+    with st.spinner("Loading Excel Data and Map Layers..."):
         met_df, water_df, hydro_df, province_gdf = load_and_process_data()
 
     # --- SIDEBAR ---
-    st.sidebar.title("📍 Map Controls")
-    st.sidebar.subheader("Layer Selection")
+    st.sidebar.title("📍 Network Settings")
     show_met = st.sidebar.toggle("Meteorology Network", value=True)
     show_water = st.sidebar.toggle("Water Quality Network", value=True)
     show_hydro = st.sidebar.toggle("Hydrology Network", value=True)
@@ -97,27 +95,27 @@ try:
     # Province Filter
     name_col = [c for c in province_gdf.columns if 'NAME' in c.upper() or 'TINH' in c.upper()][0]
     all_provs = sorted(list(province_gdf[name_col].unique()))
-    selected_prov = st.sidebar.selectbox("Filter by Province", ["All Vietnam"] + all_provs)
+    selected_prov = st.sidebar.selectbox("Focus on Province", ["All Vietnam"] + all_provs)
 
     # --- MAIN DASHBOARD ---
     st.title("Vietnam Environmental Monitoring Network")
-    st.markdown("Visualizing multi-parameter monitoring stations across Vietnam.")
     
-    # Summary Statistics
+    # Summary Metrics
     c1, c2, c3 = st.columns(3)
-    with c1: st.metric("Meteorology", len(met_df))
-    with c2: st.metric("Water Quality", len(water_df))
-    with c3: st.metric("Hydrology", len(hydro_df))
+    c1.metric("Meteorology Stations", len(met_df))
+    c2.metric("Water Quality Stations", len(water_df))
+    c3.metric("Hydrology Stations", len(hydro_df))
 
-    # --- INTERACTIVE MAP ---
+    # --- MAP ---
+    # Centered on Vietnam
     m = folium.Map(location=[16.0, 107.0], zoom_start=6, tiles="cartodbpositron")
     Fullscreen().add_to(m)
 
-    # Province Boundaries
+    # Add Province Boundaries
     folium.GeoJson(
         province_gdf,
-        name="Administrative Boundaries",
-        style_function=lambda x: {'fillColor': 'transparent', 'color': '#007bff', 'weight': 1, 'opacity': 0.4}
+        name="Administrative Borders",
+        style_function=lambda x: {'fillColor': 'transparent', 'color': '#007bff', 'weight': 1.5, 'opacity': 0.4}
     ).add_to(m)
 
     def plot_data(df, color, label):
@@ -127,33 +125,35 @@ try:
         
         cluster = MarkerCluster(name=label).add_to(m)
         for _, row in data.iterrows():
-            popup_content = f"""
-            <div style="font-family: Arial; font-size: 12px;">
-                <h4 style="margin: 0; color: {color};">{row['name']}</h4>
+            popup_html = f"""
+            <div style="font-family: sans-serif; min-width: 150px;">
+                <h4 style="margin:0; color:{color};">{row['name']}</h4>
                 <b>Type:</b> {label}<br>
                 <b>Province:</b> {row['province']}
             """
             if 'altitude' in row and not pd.isna(row['altitude']):
-                popup_content += f"<br><b>Altitude:</b> {row['altitude']}m"
-            popup_content += "</div>"
-            
+                popup_html += f"<br><b>Altitude:</b> {row['altitude']} m"
+            popup_html += "</div>"
+
             folium.CircleMarker(
                 location=[row['lat'], row['lon']],
                 radius=6,
-                popup=folium.Popup(popup_content, max_width=300),
+                popup=folium.Popup(popup_html, max_width=300),
                 color=color,
                 fill=True,
                 fill_color=color,
                 fill_opacity=0.7
             ).add_to(cluster)
 
-    if show_met: plot_data(met_df, "#0033cc", "Meteorology")
-    if show_water: plot_data(water_df, "#28a745", "Water Quality")
-    if show_hydro: plot_data(hydro_df, "#dc3545", "Hydrology")
+    if show_met: plot_data(met_df, "#0052cc", "Meteorology")
+    if show_water: plot_data(water_df, "#228b22", "Water Quality")
+    if show_hydro: plot_data(hydro_df, "#d32f2f", "Hydrology")
 
     folium.LayerControl().add_to(m)
-    st_folium(m, width="100%", height=700, key="vnm_main_map")
+    
+    # Display Map
+    st_folium(m, width="100%", height=650, key="vn_env_map", returned_objects=[])
 
 except Exception as e:
     st.error(f"Critical System Error: {e}")
-    st.info("Check your repository to ensure CSV and Shapefiles are present.")
+    st.info("Ensure all .xlsx files are in the repository and the 'openpyxl' library is installed.")
