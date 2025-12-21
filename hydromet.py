@@ -38,9 +38,10 @@ def load_and_process_data():
             return pd.read_csv(path)
         return pd.read_excel(path)
 
-    met = read_flexible("meteorology", "Meteorology").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat', 'ALTITUDE': 'altitude'}) [cite: 27]
-    water = read_flexible("water quality", "Water Quality").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat', 'Province': 'province_raw'}) [cite: 30]
-    hydro = read_flexible("hydrology", "Hydrology").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat'}) [cite: 46]
+    # Specific column names from your files: STATIONS, LAT, LON, ALTITUDE
+    met = read_flexible("meteorology", "Meteorology").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat', 'ALTITUDE': 'altitude'})
+    water = read_flexible("water quality", "Water Quality").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat', 'Province': 'province_raw'})
+    hydro = read_flexible("hydrology", "Hydrology").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat'})
     
     # 2. Clean station names and coordinates
     for df in [met, water, hydro]:
@@ -62,9 +63,9 @@ def load_and_process_data():
         points = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat), crs="EPSG:4326")
         joined = gpd.sjoin(points, gdf_prov, how="left", predicate="within")
         
-        # Robustly find the province name column
+        # Robustly find the province name column in shapefile
         potential_cols = [c for c in joined.columns if any(x in c.upper() for x in ['NAME', 'TINH', 'PROVINCE'])]
-        prov_col = potential_cols[0] if potential_cols else gdf_prov.columns[1] # Fallback to 2nd col
+        prov_col = potential_cols[0] if potential_cols else gdf_prov.columns[1]
         
         df['province'] = joined[prov_col].fillna("Unknown Area")
         return df, prov_col
@@ -80,8 +81,16 @@ try:
     with st.spinner("Processing network data..."):
         met_df, water_df, hydro_df, province_gdf, prov_name_col = load_and_process_data()
 
-    # Sidebar Controls
+    # --- SIDEBAR CONTROLS ---
     st.sidebar.title("📍 Network Settings")
+    
+    # Pro Feature: Station Search
+    st.sidebar.subheader("🔍 Station Search")
+    search_query = st.sidebar.text_input("Enter Station Name", "").strip().lower()
+
+    st.sidebar.divider()
+    
+    st.sidebar.subheader("Layer Visibility")
     show_met = st.sidebar.toggle("Meteorology Network", value=True)
     show_water = st.sidebar.toggle("Water Quality Network", value=True)
     show_hydro = st.sidebar.toggle("Hydrology Network", value=True)
@@ -92,27 +101,34 @@ try:
     all_provs = sorted(list(province_gdf[prov_name_col].unique()))
     selected_prov = st.sidebar.selectbox("Focus on Province", ["All Vietnam"] + all_provs)
 
+    # --- MAIN DASHBOARD ---
     st.title("Vietnam Environmental Monitoring Portal")
     
-    # Summary Statistics
+    # Summary Statistics Row
     c1, c2, c3 = st.columns(3)
-    c1.metric("Meteorology", len(met_df)) [cite: 27]
-    c2.metric("Water Quality", len(water_df)) [cite: 30]
-    c3.metric("Hydrology", len(hydro_df)) [cite: 46]
+    c1.metric("Meteorology Stations", len(met_df))
+    c2.metric("Water Quality Stations", len(water_df))
+    c3.metric("Hydrology Stations", len(hydro_df))
 
-    # Map Creation
+    # --- MAP LOGIC ---
     m = folium.Map(location=[16.0, 107.5], zoom_start=6, tiles="cartodbpositron")
     Fullscreen().add_to(m)
 
     # Add Province Boundaries
     folium.GeoJson(
         province_gdf,
-        name="Borders",
+        name="Administrative Borders",
         style_function=lambda x: {'fillColor': 'transparent', 'color': '#007bff', 'weight': 1.5, 'opacity': 0.4}
     ).add_to(m)
 
     def plot_data(df, color, label):
         data = df.copy()
+        
+        # Apply Search Filter
+        if search_query:
+            data = data[data['name'].str.lower().str.contains(search_query)]
+        
+        # Apply Province Filter
         if selected_prov != "All Vietnam":
             data = data[data['province'] == selected_prov]
         
@@ -120,7 +136,7 @@ try:
         for _, row in data.iterrows():
             popup_html = f"<b>{row['name']}</b><br>Type: {label}<br>Province: {row['province']}"
             if 'altitude' in row and not pd.isna(row['altitude']):
-                popup_html += f"<br>Altitude: {row['altitude']} m" [cite: 27]
+                popup_html += f"<br>Altitude: {row['altitude']} m"
 
             folium.CircleMarker(
                 location=[row['lat'], row['lon']],
@@ -134,10 +150,4 @@ try:
 
     if show_met: plot_data(met_df, "#0052cc", "Meteorology")
     if show_water: plot_data(water_df, "#228b22", "Water Quality")
-    if show_hydro: plot_data(hydro_df, "#d32f2f", "Hydrology")
-
-    folium.LayerControl().add_to(m)
-    st_folium(m, width="100%", height=650, key="vn_hydromet_final")
-
-except Exception as e:
-    st.error(f"Critical System Error: {e}")
+    if show_hydro
