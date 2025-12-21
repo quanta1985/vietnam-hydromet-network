@@ -4,15 +4,12 @@ import folium
 from streamlit_folium import st_folium
 from folium.plugins import MarkerCluster, Fullscreen, MiniMap, Draw
 import os
+import glob
 
-# --- PAGE CONFIGURATION ---
-st.set_page_config(
-    page_title="Vietnam Hydromet Monitoring System", 
-    layout="wide", 
-    page_icon="🌐"
-)
+# --- CẤU HÌNH TRANG ---
+st.set_page_config(page_title="Vietnam Monitoring System", layout="wide", page_icon="🌐")
 
-# Professional CSS for a clean Dashboard look
+# Giao diện CSS chuyên nghiệp
 st.markdown("""
     <style>
     .main { background-color: #f4f7f9; }
@@ -23,148 +20,117 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.05);
         border: 1px solid #e1e8ed;
     }
-    .stSidebar { background-color: #ffffff; border-right: 1px solid #dee2e6; }
     .footer {
         position: fixed;
         left: 0;
         bottom: 0;
         width: 100%;
-        background-color: #f8f9fa;
-        color: #6c757d;
+        background-color: white;
+        color: #555;
         text-align: center;
-        padding: 8px;
-        font-size: 11px;
-        border-top: 1px solid #e1e8ed;
+        padding: 10px;
+        font-size: 12px;
+        border-top: 1px solid #ddd;
         z-index: 1000;
     }
     </style>
     """, unsafe_allow_html=True)
 
 @st.cache_data
-def load_and_process_data():
-    # File paths based on your provided data
-    met = pd.read_csv("meteorology.xlsx - Sheet1.csv").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat'})
-    water = pd.read_csv("water quality.xlsx - Sheet.csv").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat'})
-    hydro = pd.read_csv("hydrology station.xlsx - Export.csv").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat'})
-    
-    for df in [met, water, hydro]:
-        df['name'] = df['name'].astype(str).str.replace(r'\n', '', regex=True).str.strip()
+def load_data():
+    def find_and_read(keyword):
+        # Tìm file có chứa từ khóa (không phân biệt hoa thường)
+        files = glob.glob(f"*{keyword}*.csv")
+        if not files:
+            return pd.DataFrame()
+        df = pd.read_csv(files[0])
+        # Chuẩn hóa tên cột
+        df.columns = [c.strip().upper() for c in df.columns]
+        # Đổi tên về chuẩn chung để code bên dưới chạy được
+        rename_map = {'STATIONS': 'name', 'STATION_NAME': 'name', 'LAT': 'lat', 'LON': 'lon'}
+        df = df.rename(columns=rename_map)
+        # Làm sạch dữ liệu tọa độ
         df['lat'] = pd.to_numeric(df['lat'], errors='coerce')
         df['lon'] = pd.to_numeric(df['lon'], errors='coerce')
-        df.dropna(subset=['lat', 'lon'], inplace=True)
-        
+        return df.dropna(subset=['lat', 'lon'])
+
+    met = find_and_read("meteorology")
+    water = find_and_read("water quality")
+    hydro = find_and_read("hydrology")
+    
     return met, water, hydro
 
-# --- APP LOGIC ---
 try:
-    met_df, water_df, hydro_df = load_and_process_data()
+    met_df, water_df, hydro_df = load_data()
 
-    # --- SIDEBAR: SYSTEM CONTROLS ---
+    # --- THANH ĐIỀU KHIỂN (SIDEBAR) ---
     st.sidebar.title("🛠 System Control")
     
-    with st.sidebar.expander("🗺️ Map Customization", expanded=True):
-        basemap = st.selectbox("Basemap Style", ["Light (CartoDB)", "Satellite (Google)", "Dark Mode", "Terrain"])
-        tiles_map = {
-            "Light (CartoDB)": "cartodbpositron",
-            "Satellite (Google)": "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
-            "Dark Mode": "cartodbdark_matter",
+    with st.sidebar.expander("🗺️ Map Appearance", expanded=True):
+        basemap_opt = st.selectbox("Basemap Style", ["Light (Default)", "Satellite", "Dark", "Terrain"])
+        tiles = {
+            "Light (Default)": "cartodbpositron",
+            "Satellite": "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+            "Dark": "cartodbdark_matter",
             "Terrain": "https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}"
         }
-        attr_map = {"Satellite (Google)": "Google", "Terrain": "Google"}
+        attr = "Google" if basemap_opt in ["Satellite", "Terrain"] else "OpenStreetMap"
 
-    with st.sidebar.expander("⚙️ Display Settings", expanded=True):
-        disable_clustering = st.checkbox("Disable Cluster Stacking", help="Show every station individually without numbers.")
-        show_names = st.checkbox("Always Show Station Labels", value=False)
-        search_query = st.text_input("🔍 Filter by Name", "").strip().lower()
+    with st.sidebar.expander("⚙️ Display Options", expanded=True):
+        disable_clustering = st.checkbox("Show Individual Stations (No Grouping)", value=False)
+        show_names = st.checkbox("Always Display Names", value=False)
+        search = st.text_input("🔍 Search Station Name", "").strip().lower()
 
     with st.sidebar.expander("📡 Network Layers", expanded=True):
         show_met = st.toggle("Meteorology Network", value=True)
-        # Radius Feature (Meteorology Only)
+        # Chỉ hỗ trợ radius cho trạm khí tượng
         met_radius_on = False
         if show_met:
-            met_radius_on = st.checkbox("Enable Coverage Radius")
+            met_radius_on = st.checkbox("Show Met Coverage Radius")
             if met_radius_on:
-                met_rad_km = st.slider("Radius (km)", 5, 150, 30)
-                met_rad_color = st.color_picker("Radius Blending Color", "#3498db")
+                met_km = st.slider("Radius (km)", 5, 100, 20)
+                met_color = st.color_picker("Radius Color", "#3498db")
         
         st.divider()
         show_water = st.toggle("Water Quality Network", value=True)
         show_hydro = st.toggle("Hydrology Network", value=True)
 
-    # --- MAIN DASHBOARD ---
+    # --- GIAO DIỆN CHÍNH ---
     st.title("Vietnam Environmental Monitoring Network")
     
-    # KPIs for Network Health
     col1, col2, col3 = st.columns(3)
-    col1.metric("Meteorology Network", f"{len(met_df)} Stations")
-    col2.metric("Water Quality", f"{len(water_df)} Points")
-    col3.metric("Hydrology Network", f"{len(hydro_df)} Stations")
+    col1.metric("Meteorology", len(met_df))
+    col2.metric("Water Quality", len(water_df))
+    col3.metric("Hydrology", len(hydro_df))
 
-    # --- MAP RENDERING ---
-    m = folium.Map(
-        location=[16.46, 107.59], 
-        zoom_start=6, 
-        tiles=tiles_map[basemap], 
-        attr=attr_map.get(basemap, "OpenStreetMap")
-    )
+    # Khởi tạo bản đồ
+    m = folium.Map(location=[16.0, 107.5], zoom_start=6, tiles=tiles[basemap_opt], attr=attr)
 
-    # Professional Plugins
-    MiniMap(toggle_display=True, width=220, height=220, position='bottomright').add_to(m)
+    # Thêm công cụ Pro
+    MiniMap(toggle_display=True, width=180, height=180, position='bottomright').add_to(m)
     Fullscreen().add_to(m)
     Draw(export=True, position='topleft').add_to(m)
 
-    def add_layer(df, color, icon, label, is_met=False):
+    def plot_layer(df, color, icon, label, is_met=False):
+        if df.empty: return
         data = df.copy()
-        if search_query:
-            data = data[data['name'].str.lower().str.contains(search_query)]
+        if search:
+            data = data[data['NAME'].astype(str).str.lower().str.contains(search)]
         
-        # Determine if we add directly to map or a cluster
-        if disable_clustering:
-            container = m
-        else:
-            container = MarkerCluster(name=label, control=True).add_to(m)
+        # Quyết định dùng Cluster hay hiện rời rạc
+        container = m if disable_clustering else MarkerCluster(name=label).add_to(m)
             
         for _, row in data.iterrows():
-            tooltip = row['name'] if show_names else None
-            
-            # Specialized Circle for "Blending" effect
+            # Thêm bán kính cho khí tượng (hiệu ứng hòa quyện - blending)
             if is_met and met_radius_on:
                 folium.Circle(
                     location=[row['lat'], row['lon']],
-                    radius=met_rad_km * 1000,
-                    color=met_rad_color,
-                    weight=0.5,
+                    radius=met_km * 1000,
+                    color=met_color,
                     fill=True,
-                    fill_color=met_rad_color,
-                    fill_opacity=0.15,
-                    stroke=False # Removes edge to allow smooth blending
+                    fill_color=met_color,
+                    fill_opacity=0.15, # Độ mờ thấp để khi chồng lên nhau sẽ đậm hơn
+                    stroke=False      # Không viền để hòa quyện mượt mà
                 ).add_to(m)
 
-            # Station Marker
-            folium.Marker(
-                location=[row['lat'], row['lon']],
-                popup=f"<b>Station:</b> {row['name']}<br><b>Network:</b> {label}",
-                tooltip=tooltip,
-                icon=folium.Icon(color=color, icon=icon, prefix='fa')
-            ).add_to(container)
-
-    if show_met: add_layer(met_df, "blue", "cloud", "Meteorology", is_met=True)
-    if show_water: add_layer(water_df, "green", "tint", "Water Quality")
-    if show_hydro: add_layer(hydro_df, "red", "water", "Hydrology")
-
-    folium.LayerControl(position='topright', collapsed=False).add_to(m)
-    
-    # Map Display
-    st_folium(m, width="100%", height=750, key="vn_system_pro")
-
-    # Copyright Footer
-    st.markdown("""
-        <div class="footer">
-            © 2024 Vietnam Environmental Monitoring Network System. All rights reserved. 
-            | Unauthorized reproduction of spatial data is prohibited.
-        </div>
-        """, unsafe_allow_html=True)
-
-except Exception as e:
-    st.error(f"System Error: {e}")
-    st.info("Please ensure the CSV files are in the root directory of your GitHub repository.")
+            # Thêm Marker
