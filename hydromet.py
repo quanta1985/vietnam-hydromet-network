@@ -4,48 +4,37 @@ import folium
 from streamlit_folium import st_folium
 from folium.plugins import MarkerCluster, Fullscreen, MiniMap, Draw
 import os
+import glob
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(
-    page_title="Vietnam Hydromet Monitoring System", 
-    layout="wide", 
-    page_icon="🌐"
-)
+st.set_page_config(page_title="Vietnam Hydromet Network", layout="wide", page_icon="🌍")
 
-# Professional CSS for a clean Dashboard look
+# Professional Styling
 st.markdown("""
     <style>
-    .main { background-color: #f4f7f9; }
-    .stMetric {
-        background-color: #ffffff;
-        padding: 20px;
-        border-radius: 12px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-        border: 1px solid #e1e8ed;
-    }
-    .stSidebar { background-color: #ffffff; border-right: 1px solid #dee2e6; }
-    .footer {
-        position: fixed;
-        left: 0;
-        bottom: 0;
-        width: 100%;
-        background-color: #f8f9fa;
-        color: #6c757d;
-        text-align: center;
-        padding: 8px;
-        font-size: 11px;
-        border-top: 1px solid #e1e8ed;
-        z-index: 1000;
-    }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border: 1px solid #e1e4e8; }
+    [data-testid="stSidebar"] { background-color: #f8f9fa; border-right: 1px solid #e1e4e8; }
     </style>
     """, unsafe_allow_html=True)
 
 @st.cache_data
 def load_and_process_data():
-    # File paths based on your provided data
-    met = pd.read_csv("meteorology.xlsx - Sheet1.csv").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat'})
-    water = pd.read_csv("water quality.xlsx - Sheet.csv").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat'})
-    hydro = pd.read_csv("hydrology station.xlsx - Export.csv").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat'})
+    def find_file(patterns):
+        search_dirs = [".", "data"]
+        for pattern in patterns:
+            for d in search_dirs:
+                matches = glob.glob(os.path.join(d, pattern))
+                if matches: return matches[0]
+        return None
+
+    def read_flexible(pattern, name_label):
+        path = find_file([f"*{pattern}*.xlsx", f"*{pattern}*.csv"])
+        if not path: raise FileNotFoundError(f"Could not find {name_label} file.")
+        return pd.read_csv(path) if path.lower().endswith('.csv') else pd.read_excel(path)
+
+    met = read_flexible("meteorology", "Meteorology").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat', 'ALTITUDE': 'altitude'})
+    water = read_flexible("water quality", "Water Quality").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat', 'Province': 'province'})
+    hydro = read_flexible("hydrology", "Hydrology").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat'})
     
     for df in [met, water, hydro]:
         df['name'] = df['name'].astype(str).str.replace(r'\n', '', regex=True).str.strip()
@@ -55,116 +44,112 @@ def load_and_process_data():
         
     return met, water, hydro
 
-# --- APP LOGIC ---
+# --- MAIN APP LOGIC ---
 try:
     met_df, water_df, hydro_df = load_and_process_data()
 
-    # --- SIDEBAR: SYSTEM CONTROLS ---
-    st.sidebar.title("🛠 System Control")
+    # --- SIDEBAR CONTROLS ---
+    st.sidebar.title("🛠 Map Toolbox")
     
-    with st.sidebar.expander("🗺️ Map Customization", expanded=True):
-        basemap = st.selectbox("Basemap Style", ["Light (CartoDB)", "Satellite (Google)", "Dark Mode", "Terrain"])
-        tiles_map = {
-            "Light (CartoDB)": "cartodbpositron",
-            "Satellite (Google)": "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
-            "Dark Mode": "cartodbdark_matter",
-            "Terrain": "https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}"
-        }
-        attr_map = {"Satellite (Google)": "Google", "Terrain": "Google"}
+    # 1. Basemap Selection
+    basemap = st.sidebar.selectbox("Change Basemap", ["Light (Default)", "Satellite", "Dark", "Terrain"])
+    tiles_map = {
+        "Light (Default)": "cartodbpositron",
+        "Satellite": "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+        "Dark": "cartodbdark_matter",
+        "Terrain": "https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}"
+    }
+    attr_map = {
+        "Satellite": "Google",
+        "Terrain": "Google"
+    }
 
-    with st.sidebar.expander("⚙️ Display Settings", expanded=True):
-        disable_clustering = st.checkbox("Disable Cluster Stacking", help="Show every station individually without numbers.")
-        show_names = st.checkbox("Always Show Station Labels", value=False)
-        search_query = st.text_input("🔍 Filter by Name", "").strip().lower()
+    st.sidebar.divider()
 
-    with st.sidebar.expander("📡 Network Layers", expanded=True):
-        show_met = st.toggle("Meteorology Network", value=True)
-        # Radius Feature (Meteorology Only)
-        met_radius_on = False
-        if show_met:
-            met_radius_on = st.checkbox("Enable Coverage Radius")
-            if met_radius_on:
-                met_rad_km = st.slider("Radius (km)", 5, 150, 30)
-                met_rad_color = st.color_picker("Radius Blending Color", "#3498db")
-        
-        st.divider()
-        show_water = st.toggle("Water Quality Network", value=True)
-        show_hydro = st.toggle("Hydrology Network", value=True)
-
-    # --- MAIN DASHBOARD ---
-    st.title("Vietnam Environmental Monitoring Network")
+    # 2. Search & Visibility
+    search_query = st.sidebar.text_input("🔍 Search Station Name", "").strip().lower()
+    show_names = st.sidebar.toggle("🏷 Always Show Station Names", value=False)
     
-    # KPIs for Network Health
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Meteorology Network", f"{len(met_df)} Stations")
-    col2.metric("Water Quality", f"{len(water_df)} Points")
-    col3.metric("Hydrology Network", f"{len(hydro_df)} Stations")
+    st.sidebar.divider()
+
+    # 3. Layer Visibility & Service Radius
+    st.sidebar.subheader("Layer Settings")
+    
+    # Meteorology Settings
+    show_met = st.sidebar.toggle("Meteorology Network", value=True)
+    rad_met = 0
+    if show_met and st.sidebar.checkbox("Add Met Radius"):
+        rad_met = st.sidebar.slider("Met Radius (km)", 1, 50, 10) * 1000
+
+    # Water Quality Settings
+    show_water = st.sidebar.toggle("Water Quality Network", value=True)
+    rad_water = 0
+    if show_water and st.sidebar.checkbox("Add Water Radius"):
+        rad_water = st.sidebar.slider("Water Radius (km)", 1, 50, 5) * 1000
+
+    # Hydrology Settings
+    show_hydro = st.sidebar.toggle("Hydrology Network", value=True)
+    rad_hydro = 0
+    if show_hydro and st.sidebar.checkbox("Add Hydro Radius"):
+        rad_hydro = st.sidebar.slider("Hydro Radius (km)", 1, 50, 20) * 1000
+
+    # --- DASHBOARD HEADER ---
+    st.title("Vietnam Environmental Monitoring Portal")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Met Stations", len(met_df))
+    c2.metric("Water Stations", len(water_df))
+    c3.metric("Hydro Stations", len(hydro_df))
 
     # --- MAP RENDERING ---
     m = folium.Map(
-        location=[16.46, 107.59], 
+        location=[16.0, 107.5], 
         zoom_start=6, 
         tiles=tiles_map[basemap], 
         attr=attr_map.get(basemap, "OpenStreetMap")
     )
 
-    # Professional Plugins
-    MiniMap(toggle_display=True, width=220, height=220, position='bottomright').add_to(m)
+    # Pro Feature: MiniMap (Bigger)
+    MiniMap(toggle_display=True, width=150, height=150, position='bottomright').add_to(m)
+    
+    # Pro Feature: Fullscreen & Draw Toolbox
     Fullscreen().add_to(m)
-    Draw(export=True, position='topleft').add_to(m)
+    Draw(export=True, position='topleft', draw_options={'polyline':False, 'circlemarker':False}).add_to(m)
 
-    def add_layer(df, color, icon, label, is_met=False):
+    def plot_data(df, color, icon_name, label, radius_m):
         data = df.copy()
         if search_query:
             data = data[data['name'].str.lower().str.contains(search_query)]
         
-        # Determine if we add directly to map or a cluster
-        if disable_clustering:
-            container = m
-        else:
-            container = MarkerCluster(name=label, control=True).add_to(m)
-            
+        cluster = MarkerCluster(name=label).add_to(m)
         for _, row in data.iterrows():
-            tooltip = row['name'] if show_names else None
+            # Tooltip logic for "Auto appear names"
+            tooltip_txt = row['name'] if show_names else None
             
-            # Specialized Circle for "Blending" effect
-            if is_met and met_radius_on:
-                folium.Circle(
-                    location=[row['lat'], row['lon']],
-                    radius=met_rad_km * 1000,
-                    color=met_rad_color,
-                    weight=0.5,
-                    fill=True,
-                    fill_color=met_rad_color,
-                    fill_opacity=0.15,
-                    stroke=False # Removes edge to allow smooth blending
-                ).add_to(m)
-
-            # Station Marker
+            # Marker with Beautiful Icon
             folium.Marker(
                 location=[row['lat'], row['lon']],
-                popup=f"<b>Station:</b> {row['name']}<br><b>Network:</b> {label}",
-                tooltip=tooltip,
-                icon=folium.Icon(color=color, icon=icon, prefix='fa')
-            ).add_to(container)
+                popup=f"<b>{row['name']}</b><br>Type: {label}",
+                tooltip=tooltip_txt,
+                icon=folium.Icon(color=color, icon=icon_name, prefix='fa')
+            ).add_to(cluster)
+            
+            # Service Radius Circle
+            if radius_m > 0:
+                folium.Circle(
+                    location=[row['lat'], row['lon']],
+                    radius=radius_m,
+                    color=color,
+                    fill=True,
+                    fill_opacity=0.1,
+                    weight=1
+                ).add_to(m)
 
-    if show_met: add_layer(met_df, "blue", "cloud", "Meteorology", is_met=True)
-    if show_water: add_layer(water_df, "green", "tint", "Water Quality")
-    if show_hydro: add_layer(hydro_df, "red", "water", "Hydrology")
+    if show_met: plot_data(met_df, "blue", "cloud", "Meteorology", rad_met)
+    if show_water: plot_data(water_df, "green", "tint", "Water Quality", rad_water)
+    if show_hydro: plot_data(hydro_df, "red", "water", "Hydrology", rad_hydro)
 
-    folium.LayerControl(position='topright', collapsed=False).add_to(m)
-    
-    # Map Display
-    st_folium(m, width="100%", height=750, key="vn_system_pro")
-
-    # Copyright Footer
-    st.markdown("""
-        <div class="footer">
-            © 2024 Vietnam Environmental Monitoring Network System. All rights reserved. 
-            | Unauthorized reproduction of spatial data is prohibited.
-        </div>
-        """, unsafe_allow_html=True)
+    folium.LayerControl().add_to(m)
+    st_folium(m, width="100%", height=750, key="vn_pro_map", returned_objects=[])
 
 except Exception as e:
-    st.error(f"System Error: {e}")
-    st.info("Please ensure the CSV files are in the root directory of your GitHub repository.")
+    st.error(f"Error: {e}")
