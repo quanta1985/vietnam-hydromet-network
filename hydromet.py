@@ -3,14 +3,13 @@ import pandas as pd
 import folium
 from streamlit_folium import st_folium
 from folium.plugins import MarkerCluster, Fullscreen
-import geopandas as gpd
 import os
 import glob
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Vietnam Hydromet Network", layout="wide", page_icon="🌍")
+st.set_page_config(page_title="Vietnam Monitoring Network", layout="wide", page_icon="🌍")
 
-# Professional Styling
+# Professional Styling for the Dashboard
 st.markdown("""
     <style>
     .stMetric { background-color: #ffffff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border: 1px solid #e1e4e8; }
@@ -22,8 +21,8 @@ st.markdown("""
 @st.cache_data
 def load_and_process_data():
     def find_file(patterns):
-        """Finds a file matching any pattern in root, 'data', or 'shapefiles' folder."""
-        search_dirs = [".", "data", "shapefiles"]
+        """Finds a file matching any pattern in root or 'data' folder."""
+        search_dirs = [".", "data"]
         for pattern in patterns:
             for d in search_dirs:
                 matches = glob.glob(os.path.join(d, pattern))
@@ -34,57 +33,34 @@ def load_and_process_data():
     def read_flexible(pattern, name_label):
         path = find_file([f"*{pattern}*.xlsx", f"*{pattern}*.csv"])
         if not path: raise FileNotFoundError(f"Could not find {name_label} file.")
-        if path.endswith('.csv'):
+        # Handle Excel vs CSV
+        if path.lower().endswith('.csv'):
             return pd.read_csv(path)
         return pd.read_excel(path)
 
-    # Specific column names from your files: STATIONS, LAT, LON, ALTITUDE
+    # Standardize column names during load
     met = read_flexible("meteorology", "Meteorology").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat', 'ALTITUDE': 'altitude'})
-    water = read_flexible("water quality", "Water Quality").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat', 'Province': 'province_raw'})
+    water = read_flexible("water quality", "Water Quality").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat', 'Province': 'province'})
     hydro = read_flexible("hydrology", "Hydrology").rename(columns={'STATIONS': 'name', 'LON': 'lon', 'LAT': 'lat'})
     
-    # 2. Clean station names and coordinates
+    # 2. Data Cleaning - Essential for Mapping
     for df in [met, water, hydro]:
         df['name'] = df['name'].astype(str).str.replace(r'\n', '', regex=True).str.strip()
         df['lat'] = pd.to_numeric(df['lat'], errors='coerce')
         df['lon'] = pd.to_numeric(df['lon'], errors='coerce')
         df.dropna(subset=['lat', 'lon'], inplace=True)
-
-    # 3. Load Shapefile
-    shp_file = find_file(["Vietnam34.shp"])
-    if not shp_file: raise FileNotFoundError("Vietnam34.shp not found. Check your shapefiles folder.")
-    
-    gdf_prov = gpd.read_file(shp_file)
-    gdf_prov = gdf_prov.to_crs(epsg=4326)
-    gdf_prov['geometry'] = gdf_prov['geometry'].simplify(tolerance=0.01)
-
-    # 4. Defensive Province Assignment
-    def assign_province(df):
-        points = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat), crs="EPSG:4326")
-        joined = gpd.sjoin(points, gdf_prov, how="left", predicate="within")
         
-        # Robustly find the province name column in shapefile
-        potential_cols = [c for c in joined.columns if any(x in c.upper() for x in ['NAME', 'TINH', 'PROVINCE'])]
-        prov_col = potential_cols[0] if potential_cols else gdf_prov.columns[1]
-        
-        df['province'] = joined[prov_col].fillna("Unknown Area")
-        return df, prov_col
+    return met, water, hydro
 
-    met_df, p_col = assign_province(met)
-    water_df, _ = assign_province(water)
-    hydro_df, _ = assign_province(hydro)
-
-    return met_df, water_df, hydro_df, gdf_prov, p_col
-
-# --- APP LAYOUT ---
+# --- MAIN APP LOGIC ---
 try:
-    with st.spinner("Processing network data..."):
-        met_df, water_df, hydro_df, province_gdf, prov_name_col = load_and_process_data()
+    with st.spinner("Loading station data..."):
+        met_df, water_df, hydro_df = load_and_process_data()
 
-    # --- SIDEBAR CONTROLS ---
+    # Sidebar Controls
     st.sidebar.title("📍 Network Settings")
     
-    # Pro Feature: Station Search
+    # Station Search Feature
     st.sidebar.subheader("🔍 Station Search")
     search_query = st.sidebar.text_input("Enter Station Name", "").strip().lower()
 
@@ -94,60 +70,32 @@ try:
     show_met = st.sidebar.toggle("Meteorology Network", value=True)
     show_water = st.sidebar.toggle("Water Quality Network", value=True)
     show_hydro = st.sidebar.toggle("Hydrology Network", value=True)
-    
-    st.sidebar.divider()
-    
-    # Unified Province Filter
-    all_provs = sorted(list(province_gdf[prov_name_col].unique()))
-    selected_prov = st.sidebar.selectbox("Focus on Province", ["All Vietnam"] + all_provs)
 
-    # --- MAIN DASHBOARD ---
     st.title("Vietnam Environmental Monitoring Portal")
     
-    # Summary Statistics Row
+    # Summary Metrics Row
     c1, c2, c3 = st.columns(3)
     c1.metric("Meteorology Stations", len(met_df))
     c2.metric("Water Quality Stations", len(water_df))
     c3.metric("Hydrology Stations", len(hydro_df))
 
-    # --- MAP LOGIC ---
+    # --- MAP RENDERING ---
+    # Center map on Vietnam
     m = folium.Map(location=[16.0, 107.5], zoom_start=6, tiles="cartodbpositron")
     Fullscreen().add_to(m)
 
-    # Add Province Boundaries
-    folium.GeoJson(
-        province_gdf,
-        name="Administrative Borders",
-        style_function=lambda x: {'fillColor': 'transparent', 'color': '#007bff', 'weight': 1.5, 'opacity': 0.4}
-    ).add_to(m)
-
+    # Plotting Function with Marker Clustering for Performance
     def plot_data(df, color, label):
         data = df.copy()
         
-        # Apply Search Filter
+        # Apply Search Filter if query is provided
         if search_query:
             data = data[data['name'].str.lower().str.contains(search_query)]
         
-        # Apply Province Filter
-        if selected_prov != "All Vietnam":
-            data = data[data['province'] == selected_prov]
-        
+        # Use MarkerCluster to handle large numbers of markers (especially Hydrology)
         cluster = MarkerCluster(name=label).add_to(m)
         for _, row in data.iterrows():
-            popup_html = f"<b>{row['name']}</b><br>Type: {label}<br>Province: {row['province']}"
-            if 'altitude' in row and not pd.isna(row['altitude']):
-                popup_html += f"<br>Altitude: {row['altitude']} m"
-
-            folium.CircleMarker(
-                location=[row['lat'], row['lon']],
-                radius=6,
-                popup=folium.Popup(popup_html, max_width=250),
-                color=color,
-                fill=True,
-                fill_color=color,
-                fill_opacity=0.7
-            ).add_to(cluster)
-
-    if show_met: plot_data(met_df, "#0052cc", "Meteorology")
-    if show_water: plot_data(water_df, "#228b22", "Water Quality")
-    if show_hydro
+            popup_html = f"<b>{row['name']}</b><br>Type: {label}"
+            # Add dynamic fields if they exist
+            if 'province' in row and not pd.isna(row['province']):
+                popup_html += f"<br>Province: {row['province']}"
